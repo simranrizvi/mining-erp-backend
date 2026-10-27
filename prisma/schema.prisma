@@ -1,0 +1,767 @@
+// ============================================================================
+// Mining Management ERP — Prisma Schema
+// Enterprise-grade schema covering all modules. Dynamic RBAC (Role &
+// Permission are tables, not enums) so Super Admin can create custom roles
+// and assign permissions at runtime without touching source code.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// AUTH / RBAC / AUDIT
+// ============================================================================
+
+model Role {
+  id          String           @id @default(uuid())
+  name        String           @unique
+  description String?
+  isSystem    Boolean          @default(false) // system roles cannot be deleted
+  isActive    Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  permissions RolePermission[]
+  users       User[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String           @id @default(uuid())
+  module      String // e.g. "users", "hr.employees", "finance.expenses"
+  action      String // e.g. "create", "read", "update", "delete", "approve", "export"
+  key         String           @unique // module:action, e.g. "hr.employees:create"
+  description String?
+  roles       RolePermission[]
+
+  @@index([module])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String     @id @default(uuid())
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model User {
+  id                String        @id @default(uuid())
+  name              String
+  email             String        @unique
+  password          String
+  phone             String?
+  avatarUrl         String?
+  isActive          Boolean       @default(true)
+  mustChangePassword Boolean      @default(false)
+  lastLoginAt       DateTime?
+  roleId            String
+  role              Role          @relation(fields: [roleId], references: [id])
+  mineSiteId        String?
+  mineSite          MineSite?     @relation(fields: [mineSiteId], references: [id])
+  employee          Employee?
+  createdById       String?
+  createdBy         User?         @relation("UserCreatedBy", fields: [createdById], references: [id])
+  createdUsers      User[]        @relation("UserCreatedBy")
+  refreshTokens     RefreshToken[]
+  auditLogs         AuditLog[]
+  notifications     Notification[]
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([roleId])
+  @@index([mineSiteId])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userAgent String?
+  ipAddress String?
+  revoked   Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+  action      String // CREATE, UPDATE, DELETE, LOGIN, LOGOUT, APPROVE, REJECT, etc.
+  module      String
+  entityId    String?
+  description String?
+  oldValue    Json?
+  newValue    Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([module])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  type      String   @default("info") // info, warning, success, error
+  link      String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+// ============================================================================
+// COMPANY / MINE SITES
+// ============================================================================
+
+model Company {
+  id        String   @id @default(uuid())
+  name      String
+  logoUrl   String?
+  address   String?
+  phone     String?
+  email     String?
+  taxId     String?
+  currency  String   @default("USD")
+  timezone  String   @default("UTC")
+  updatedAt DateTime @updatedAt
+
+  @@map("company")
+}
+
+model MineSite {
+  id              String       @id @default(uuid())
+  name            String
+  code            String       @unique
+  location        String?
+  latitude        Float?
+  longitude       Float?
+  areaHectares    Float?
+  status          String       @default("active") // active, inactive, closed
+  establishedDate DateTime?
+  description     String?
+  managerId       String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  users               User[]
+  employees           Employee[]
+  productions         Production[]
+  equipment           Equipment[]
+  vehicles            Vehicle[]
+  warehouses          Warehouse[]
+  fuelStations        FuelStation[]
+  purchaseRequests    PurchaseRequest[]
+  expenses            Expense[]
+  budgets             Budget[]
+  shifts              Shift[]
+  attendances         Attendance[]
+
+  @@map("mine_sites")
+}
+
+model SystemSetting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  category    String   @default("general")
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("system_settings")
+}
+
+// ============================================================================
+// HR MANAGEMENT
+// ============================================================================
+
+model Department {
+  id        String     @id @default(uuid())
+  name      String     @unique
+  code      String     @unique
+  employees Employee[]
+
+  @@map("departments")
+}
+
+model Employee {
+  id               String    @id @default(uuid())
+  employeeCode     String    @unique
+  userId           String?   @unique
+  user             User?     @relation(fields: [userId], references: [id])
+  firstName        String
+  lastName         String
+  email            String    @unique
+  phone            String?
+  dateOfBirth      DateTime?
+  gender           String?
+  address          String?
+  departmentId     String?
+  department       Department? @relation(fields: [departmentId], references: [id])
+  designation      String?
+  mineSiteId       String?
+  mineSite         MineSite? @relation(fields: [mineSiteId], references: [id])
+  dateOfJoining    DateTime  @default(now())
+  employmentType   String    @default("full_time") // full_time, part_time, contract
+  status           String    @default("active") // active, on_leave, terminated, suspended
+  basicSalary      Float     @default(0)
+  bankName         String?
+  bankAccountNo    String?
+  emergencyContact String?
+  photoUrl         String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  attendances      Attendance[]
+  employeeShifts   EmployeeShift[]
+  leaveRequests    LeaveRequest[]
+  payrolls         Payroll[]
+  productions      Production[]
+  maintenanceRecordsPerformed MaintenanceRecord[] @relation("PerformedBy")
+  assignedEquipment Equipment[] @relation("AssignedOperator")
+  assignedVehicles  Vehicle[]   @relation("AssignedDriver")
+  fuelIssuedTo      FuelTransaction[] @relation("FuelIssuedBy")
+
+  @@index([departmentId])
+  @@index([mineSiteId])
+  @@map("employees")
+}
+
+model Shift {
+  id         String   @id @default(uuid())
+  name       String
+  startTime  String // "08:00"
+  endTime    String // "16:00"
+  mineSiteId String?
+  mineSite   MineSite? @relation(fields: [mineSiteId], references: [id])
+
+  employeeShifts EmployeeShift[]
+
+  @@map("shifts")
+}
+
+model EmployeeShift {
+  id         String   @id @default(uuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shiftId    String
+  shift      Shift    @relation(fields: [shiftId], references: [id])
+  date       DateTime
+
+  @@unique([employeeId, date])
+  @@map("employee_shifts")
+}
+
+model Attendance {
+  id          String    @id @default(uuid())
+  employeeId  String
+  employee    Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  mineSiteId  String?
+  mineSite    MineSite? @relation(fields: [mineSiteId], references: [id])
+  date        DateTime
+  checkIn     DateTime?
+  checkOut    DateTime?
+  status      String    @default("present") // present, absent, late, half_day, on_leave
+  hoursWorked Float?
+  remarks     String?
+  createdAt   DateTime  @default(now())
+
+  @@unique([employeeId, date])
+  @@index([mineSiteId, date])
+  @@map("attendances")
+}
+
+model LeaveType {
+  id               String @id @default(uuid())
+  name             String @unique
+  maxDaysPerYear   Int    @default(0)
+  leaveRequests    LeaveRequest[]
+
+  @@map("leave_types")
+}
+
+model LeaveRequest {
+  id           String    @id @default(uuid())
+  employeeId   String
+  employee     Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveTypeId  String
+  leaveType    LeaveType @relation(fields: [leaveTypeId], references: [id])
+  startDate    DateTime
+  endDate      DateTime
+  reason       String?
+  status       String    @default("pending") // pending, approved, rejected, cancelled
+  approvedById String?
+  appliedAt    DateTime  @default(now())
+  actionAt     DateTime?
+  actionRemarks String?
+
+  @@index([employeeId])
+  @@map("leave_requests")
+}
+
+model Payroll {
+  id           String    @id @default(uuid())
+  employeeId   String
+  employee     Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  month        Int
+  year         Int
+  basicSalary  Float
+  allowances   Float     @default(0)
+  deductions   Float     @default(0)
+  overtimePay  Float     @default(0)
+  netSalary    Float
+  status       String    @default("draft") // draft, processed, paid
+  processedAt  DateTime?
+  paidAt       DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@unique([employeeId, month, year])
+  @@map("payrolls")
+}
+
+// ============================================================================
+// MINING OPERATIONS
+// ============================================================================
+
+model Production {
+  id           String    @id @default(uuid())
+  mineSiteId   String
+  mineSite     MineSite  @relation(fields: [mineSiteId], references: [id], onDelete: Cascade)
+  date         DateTime
+  shift        String    @default("day") // day, night
+  materialType String // e.g. Coal, Iron Ore, Limestone
+  quantity     Float
+  unit         String    @default("tons")
+  qualityGrade String?
+  equipmentId  String?
+  equipment    Equipment? @relation(fields: [equipmentId], references: [id])
+  operatorId   String?
+  operator     Employee? @relation(fields: [operatorId], references: [id])
+  remarks      String?
+  createdAt    DateTime  @default(now())
+
+  @@index([mineSiteId, date])
+  @@map("productions")
+}
+
+// ============================================================================
+// EQUIPMENT & FLEET MANAGEMENT
+// ============================================================================
+
+model Equipment {
+  id             String    @id @default(uuid())
+  name           String
+  code           String    @unique
+  type           String // excavator, drill, loader, crusher, etc.
+  category       String    @default("heavy_machinery")
+  manufacturer   String?
+  model          String?
+  serialNumber   String?
+  mineSiteId     String?
+  mineSite       MineSite? @relation(fields: [mineSiteId], references: [id])
+  purchaseDate   DateTime?
+  purchaseCost   Float?
+  status         String    @default("operational") // operational, under_maintenance, breakdown, retired
+  currentHours   Float     @default(0)
+  assignedOperatorId String?
+  assignedOperator   Employee? @relation("AssignedOperator", fields: [assignedOperatorId], references: [id])
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  productions          Production[]
+  maintenanceSchedules MaintenanceSchedule[]
+  maintenanceRecords   MaintenanceRecord[]
+  fuelTransactions     FuelTransaction[]
+
+  @@index([mineSiteId])
+  @@map("equipment")
+}
+
+model Vehicle {
+  id               String    @id @default(uuid())
+  name             String
+  plateNumber      String    @unique
+  type             String // dump_truck, pickup, bus, etc.
+  make             String?
+  model            String?
+  year             Int?
+  mineSiteId       String?
+  mineSite         MineSite? @relation(fields: [mineSiteId], references: [id])
+  status           String    @default("operational") // operational, under_maintenance, breakdown, retired
+  currentOdometer  Float     @default(0)
+  fuelType         String    @default("diesel")
+  assignedDriverId String?
+  assignedDriver   Employee? @relation("AssignedDriver", fields: [assignedDriverId], references: [id])
+  purchaseDate     DateTime?
+  purchaseCost     Float?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  maintenanceSchedules MaintenanceSchedule[]
+  maintenanceRecords   MaintenanceRecord[]
+  fuelTransactions     FuelTransaction[]
+
+  @@index([mineSiteId])
+  @@map("vehicles")
+}
+
+// ============================================================================
+// MAINTENANCE MANAGEMENT
+// ============================================================================
+
+model MaintenanceSchedule {
+  id          String     @id @default(uuid())
+  equipmentId String?
+  equipment   Equipment? @relation(fields: [equipmentId], references: [id])
+  vehicleId   String?
+  vehicle     Vehicle?   @relation(fields: [vehicleId], references: [id])
+  type        String     @default("preventive") // preventive, corrective
+  frequencyDays Int?
+  scheduledDate DateTime
+  description String?
+  status      String     @default("scheduled") // scheduled, completed, overdue, cancelled
+  createdAt   DateTime   @default(now())
+
+  @@map("maintenance_schedules")
+}
+
+model MaintenanceRecord {
+  id              String     @id @default(uuid())
+  equipmentId     String?
+  equipment       Equipment? @relation(fields: [equipmentId], references: [id])
+  vehicleId       String?
+  vehicle         Vehicle?   @relation(fields: [vehicleId], references: [id])
+  maintenanceType String     @default("preventive")
+  description     String?
+  cost            Float      @default(0)
+  performedById   String?
+  performedBy     Employee?  @relation("PerformedBy", fields: [performedById], references: [id])
+  vendorId        String?
+  vendor          Vendor?    @relation(fields: [vendorId], references: [id])
+  startDate       DateTime
+  endDate         DateTime?
+  status          String     @default("in_progress") // in_progress, completed, cancelled
+  partsUsed       Json?
+  downtimeHours   Float      @default(0)
+  createdAt       DateTime   @default(now())
+
+  @@index([equipmentId])
+  @@index([vehicleId])
+  @@map("maintenance_records")
+}
+
+// ============================================================================
+// INVENTORY & PROCUREMENT
+// ============================================================================
+
+model Warehouse {
+  id         String   @id @default(uuid())
+  name       String
+  mineSiteId String?
+  mineSite   MineSite? @relation(fields: [mineSiteId], references: [id])
+  location   String?
+  capacity   Float?
+
+  items         InventoryItem[]
+  stockMovements StockMovement[]
+
+  @@map("warehouses")
+}
+
+model InventoryCategory {
+  id    String @id @default(uuid())
+  name  String @unique
+  items InventoryItem[]
+
+  @@map("inventory_categories")
+}
+
+model InventoryItem {
+  id               String             @id @default(uuid())
+  sku              String             @unique
+  name             String
+  categoryId       String?
+  category         InventoryCategory? @relation(fields: [categoryId], references: [id])
+  unit             String             @default("pcs")
+  quantityInStock  Float              @default(0)
+  reorderLevel     Float              @default(0)
+  unitPrice        Float              @default(0)
+  warehouseId      String?
+  warehouse        Warehouse?         @relation(fields: [warehouseId], references: [id])
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  stockMovements       StockMovement[]
+  purchaseRequestItems PurchaseRequestItem[]
+  purchaseOrderItems   PurchaseOrderItem[]
+
+  @@map("inventory_items")
+}
+
+model StockMovement {
+  id            String        @id @default(uuid())
+  itemId        String
+  item          InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  warehouseId   String?
+  warehouse     Warehouse?    @relation(fields: [warehouseId], references: [id])
+  type          String // in, out, transfer, adjustment
+  quantity      Float
+  reference     String?
+  performedById String?
+  date          DateTime      @default(now())
+  remarks       String?
+
+  @@index([itemId])
+  @@map("stock_movements")
+}
+
+model Vendor {
+  id             String   @id @default(uuid())
+  name           String
+  contactPerson  String?
+  email          String?
+  phone          String?
+  address        String?
+  category       String?
+  status         String   @default("active") // active, inactive, blacklisted
+  rating         Float?
+  createdAt      DateTime @default(now())
+
+  purchaseOrders     PurchaseOrder[]
+  maintenanceRecords MaintenanceRecord[]
+  fuelPurchases      FuelPurchase[]
+
+  @@map("vendors")
+}
+
+model PurchaseRequest {
+  id             String   @id @default(uuid())
+  requestNumber  String   @unique
+  requestedById  String?
+  mineSiteId     String?
+  mineSite       MineSite? @relation(fields: [mineSiteId], references: [id])
+  status         String   @default("pending") // pending, approved, rejected, converted
+  justification  String?
+  requiredDate   DateTime?
+  createdAt      DateTime @default(now())
+  actionAt       DateTime?
+  actionById     String?
+  actionRemarks  String?
+
+  items          PurchaseRequestItem[]
+  purchaseOrders PurchaseOrder[]
+
+  @@map("purchase_requests")
+}
+
+model PurchaseRequestItem {
+  id                String          @id @default(uuid())
+  purchaseRequestId String
+  purchaseRequest   PurchaseRequest @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+  itemId            String?
+  item              InventoryItem?  @relation(fields: [itemId], references: [id])
+  description       String
+  quantity           Float
+  estimatedCost      Float          @default(0)
+
+  @@map("purchase_request_items")
+}
+
+model PurchaseOrder {
+  id                  String           @id @default(uuid())
+  poNumber            String           @unique
+  vendorId            String
+  vendor              Vendor           @relation(fields: [vendorId], references: [id])
+  purchaseRequestId   String?
+  purchaseRequest     PurchaseRequest? @relation(fields: [purchaseRequestId], references: [id])
+  status              String           @default("draft") // draft, sent, partial, received, cancelled
+  orderDate           DateTime         @default(now())
+  expectedDeliveryDate DateTime?
+  totalAmount         Float            @default(0)
+  createdById         String?
+  createdAt           DateTime         @default(now())
+
+  items    PurchaseOrderItem[]
+  invoices Invoice[]
+
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id               String        @id @default(uuid())
+  purchaseOrderId  String
+  purchaseOrder    PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  itemId           String?
+  item             InventoryItem? @relation(fields: [itemId], references: [id])
+  description      String
+  quantity         Float
+  unitPrice        Float
+  receivedQuantity Float         @default(0)
+
+  @@map("purchase_order_items")
+}
+
+// ============================================================================
+// FUEL MANAGEMENT
+// ============================================================================
+
+model FuelStation {
+  id           String   @id @default(uuid())
+  name         String
+  mineSiteId   String?
+  mineSite     MineSite? @relation(fields: [mineSiteId], references: [id])
+  capacity     Float    @default(0)
+  currentStock Float    @default(0)
+  fuelType     String   @default("diesel")
+
+  transactions FuelTransaction[]
+  purchases    FuelPurchase[]
+
+  @@map("fuel_stations")
+}
+
+model FuelTransaction {
+  id              String       @id @default(uuid())
+  fuelStationId   String
+  fuelStation     FuelStation  @relation(fields: [fuelStationId], references: [id])
+  vehicleId       String?
+  vehicle         Vehicle?     @relation(fields: [vehicleId], references: [id])
+  equipmentId     String?
+  equipment       Equipment?   @relation(fields: [equipmentId], references: [id])
+  quantity        Float
+  odometerReading Float?
+  cost            Float
+  issuedById      String?
+  issuedBy        Employee?    @relation("FuelIssuedBy", fields: [issuedById], references: [id])
+  date            DateTime     @default(now())
+  purpose         String?
+
+  @@index([fuelStationId])
+  @@map("fuel_transactions")
+}
+
+model FuelPurchase {
+  id            String      @id @default(uuid())
+  fuelStationId String
+  fuelStation   FuelStation @relation(fields: [fuelStationId], references: [id])
+  vendorId      String?
+  vendor        Vendor?     @relation(fields: [vendorId], references: [id])
+  quantity      Float
+  cost          Float
+  purchaseDate  DateTime    @default(now())
+  invoiceNumber String?
+
+  @@map("fuel_purchases")
+}
+
+// ============================================================================
+// FINANCE & ACCOUNTING
+// ============================================================================
+
+model ExpenseCategory {
+  id       String    @id @default(uuid())
+  name     String    @unique
+  expenses Expense[]
+
+  @@map("expense_categories")
+}
+
+model Expense {
+  id              String            @id @default(uuid())
+  expenseNumber   String            @unique
+  categoryId      String?
+  category        ExpenseCategory?  @relation(fields: [categoryId], references: [id])
+  mineSiteId      String?
+  mineSite        MineSite?         @relation(fields: [mineSiteId], references: [id])
+  amount          Float
+  date            DateTime          @default(now())
+  description     String?
+  paidTo          String?
+  paymentMethod   String            @default("cash") // cash, bank_transfer, cheque, card
+  status          String            @default("pending") // pending, approved, rejected, paid
+  submittedById   String?
+  approvedById    String?
+  attachmentUrl   String?
+  createdAt       DateTime          @default(now())
+
+  payments Payment[]
+
+  @@map("expenses")
+}
+
+model Invoice {
+  id              String         @id @default(uuid())
+  invoiceNumber   String         @unique
+  type            String         @default("purchase") // sales, purchase
+  partyName       String
+  amount          Float
+  tax             Float          @default(0)
+  totalAmount     Float
+  dueDate         DateTime?
+  status          String         @default("draft") // draft, sent, paid, overdue, cancelled
+  issueDate       DateTime       @default(now())
+  purchaseOrderId String?
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  createdAt       DateTime       @default(now())
+
+  payments Payment[]
+
+  @@map("invoices")
+}
+
+model Payment {
+  id            String   @id @default(uuid())
+  paymentNumber String   @unique
+  invoiceId     String?
+  invoice       Invoice? @relation(fields: [invoiceId], references: [id])
+  expenseId     String?
+  expense       Expense? @relation(fields: [expenseId], references: [id])
+  amount        Float
+  method        String   @default("bank_transfer")
+  date          DateTime @default(now())
+  reference     String?
+  status        String   @default("completed") // pending, completed, failed
+  processedById String?
+  createdAt     DateTime @default(now())
+
+  @@map("payments")
+}
+
+model Budget {
+  id             String   @id @default(uuid())
+  mineSiteId     String?
+  mineSite       MineSite? @relation(fields: [mineSiteId], references: [id])
+  department     String?
+  category       String
+  fiscalYear     Int
+  period         String   @default("yearly") // monthly, quarterly, yearly
+  allocatedAmount Float
+  spentAmount    Float    @default(0)
+  createdAt      DateTime @default(now())
+
+  @@map("budgets")
+}
